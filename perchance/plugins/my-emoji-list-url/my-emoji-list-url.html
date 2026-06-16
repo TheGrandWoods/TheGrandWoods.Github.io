@@ -1,0 +1,61 @@
+<div style="max-width:600px; margin:0 auto; text-align:left; font-family:system-ui,sans-serif; padding:20px;">
+  <h2>🌐 My Emoji List URL</h2>
+  <div style="display:flex; gap:8px; margin-bottom:16px;">
+    <input id="emojiInput" placeholder="😀" style="width:60px; text-align:center; font-size:22px;">
+    <input id="urlInput" placeholder="https://example.com" style="flex:1;" onkeydown="if(event.key==='Enter')addItem()">
+    <button onclick="addItem()">Add</button>
+  </div>
+  <div id="listCtn"></div>
+  <div style="margin-top:16px; display:flex; align-items:center; gap:10px;">
+    <button onclick="copyUrl()">Copy Share URL</button>
+    <span id="copyStatusEl" style="color:green;"></span>
+  </div>
+</div>
+
+<script>
+  let items = [];
+
+  function loadFromHash() {
+    try { let h = location.hash.slice(1); if(h) items = JSON.parse(decodeURIComponent(h)); } catch(e){ items = []; }
+    render();
+  }
+
+  function saveToHash() {
+    location.hash = encodeURIComponent(JSON.stringify(items));
+  }
+
+  function render() {
+    if(!items.length) { listCtn.innerHTML = '<div style="color:#888;">No items yet. Add an emoji and a URL!</div>'; return; }
+    listCtn.innerHTML = items.map((it,i) => `
+      <div style="display:flex; align-items:center; gap:10px; padding:10px; border-bottom:1px solid #eee;">
+        <a href="${it.url}" target="_blank" style="font-size:32px; text-decoration:none;">${it.emoji}</a>
+        <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#333;">${it.url}</div>
+        <button onclick="removeItem(${i})" style="background:none; border:none; cursor:pointer; font-size:18px;">🗑️</button>
+      </div>
+    `).join('');
+  }
+
+  function addItem() {
+    let em = emojiInput.value.trim();
+    let url = urlInput.value.trim();
+    if(!em || !url) return;
+    if(!/^https?:\/\//.test(url)) url = 'https://' + url;
+    items.push({emoji:em, url:url});
+    emojiInput.value = ''; urlInput.value = '';
+    saveToHash(); render();
+  }
+
+  function removeItem(i) {
+    items.splice(i,1);
+    saveToHash(); render();
+  }
+
+  function copyUrl() {
+    navigator.clipboard.writeText(location.href).then(() => {
+      copyStatusEl.textContent = 'Copied!'; setTimeout(() => copyStatusEl.textContent = '', 2000);
+    });
+  }
+
+  window.onhashchange = loadFromHash;
+  loadFromHash();
+</script>

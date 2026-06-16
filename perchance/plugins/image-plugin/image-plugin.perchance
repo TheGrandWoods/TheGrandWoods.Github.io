@@ -16,7 +16,7 @@ title
   emoji = 🖼
 
 body
-  [code("image = \\{import:image-plugin\\}")]
+  [code("image = {import:image-plugin}")]
   and you can now display an image like this:
   [code('\\[image("https://i.imgur.com/1qFNMXG.jpg")\\]')]
   And that will produce this:

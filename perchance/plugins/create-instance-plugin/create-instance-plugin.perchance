@@ -52,6 +52,6 @@ fixValues(node, mode) =>
 
 // Important counter-intuitive thing to take note of: https://www.reddit.com/r/perchance/comments/nh31xq/the_best_hack_for_methods_in_list_instances/gz0rebt
 // the "deep" option of the createInstance plugin is kinda messed up. I should warn people that the [child] list should ONLY have properties - no sub-lists. That basically solves everything, but it's a bit annoying in many cases. Ideally I'd have only called selectOne on a list if it has no properties (i.e. with equals sign). If it has properties it should be treated just as part of the hierarchical blueprint, and those sub-items should get fixed, rather than having selectOne called on it.
-// I basically need a new plugin. createInstance2 = {import:create-instance-2-plugin}
+// I basically need a new plugin. createInstance = {import:create-instance-plugin}
 // That's the ideal solution here.
 // https://perchance.org/hiad2okk9w
