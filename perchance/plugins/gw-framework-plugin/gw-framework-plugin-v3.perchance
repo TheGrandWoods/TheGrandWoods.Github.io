@@ -1,0 +1,356 @@
+// GW Framework Plugin v3 — Full UI generation and T2I parity
+// Ports UI-generation, input plumbing and behaviors from t2i-framework-plugin-v2 and t2i-framework-plugin-moss
+
+textToImagePlugin = {import:text-to-image-plugin}
+commentsPlugin = {import:comments-plugin}
+selectLeaf = {import:select-leaf-plugin}
+fullscreenButton = {import:fullscreen-button-plugin}
+aiText = {import:ai-text-plugin}
+upload = {import:upload-plugin}
+prompt2 = {import:prompt2-plugin}
+prompt2moss = {import:prompt2-plugin-moss}
+t2iStyles = {import:t2i-styles}
+t2iStylesMossDefault = {import:t2i-styles-mosberg-default}
+t2iStylesNsfw = {import:t2i-styles-mosberg-nsfw}
+tabbedCommentsPlugin = {import:tabbed-comments-plugin-v1}
+createMediaGalleryPlugin = {import:create-media-gallery-plugin}
+kv = {import:kv-plugin}
+superFetch = {import:super-fetch-plugin}
+dynamicImport = {import:dynamic-import-plugin}
+remember = {import:remember-plugin}
+seeder = {import:seeder-plugin}
+
+// Main output: takes a `settings` list (same shape as t2i frameworks) and renders
+$output(settings) =>
+  if(!window.input) window.input = {};
+  if(!window.___gw_v3) window.___gw_v3 = {};
+
+  // Ensure registry and event-bus exist early so other plugins can register/listen safely
+  window.___gw_v3.registry = window.___gw_v3.registry || {};
+  if(typeof window.___gw_v3.register !== 'function') {
+    window.___gw_v3.register = function(name, obj) { this.registry[name] = obj; };
+  }
+  window.___gw_v3._events = window.___gw_v3._events || {};
+  if(typeof window.___gw_v3.on !== 'function') {
+    window.___gw_v3.on = function(name, cb) { if(!this._events[name]) this._events[name] = []; this._events[name].push(cb); return () => { this._events[name] = this._events[name].filter(f => f !== cb); }; };
+  }
+  if(typeof window.___gw_v3.emit !== 'function') {
+    window.___gw_v3.emit = function(name, ...args) { (this._events[name] || []).forEach(cb => { try { cb(...args); } catch(e) { console.error(e); } }); };
+  }
+
+  // expose imports
+  window.___gw_v3.textToImage = textToImagePlugin;
+  window.___gw_v3.comments = commentsPlugin;
+  window.___gw_v3.kv = kv;
+  window.___gw_v3.upload = upload;
+  window.___gw_v3.aiText = aiText;
+  window.___gw_v3.superFetch = superFetch;
+  window.___gw_v3.createMediaGallery = createMediaGalleryPlugin;
+
+  // default config
+  window.___gw_v3.config = Object.assign({
+    lazyLoadIframes: true,
+    autoCompressShareLinks: true,
+    scrubShareData: true,
+    enableProxiedFetch: false,
+    maxConcurrentGenerations: 3,
+    defaultNumImages: 6,
+    gallery: true,
+    galleryCols: 3,
+    socialFeatures: 'enabled',
+    rememberInputsPrefix: 'gw_v3_remembered',
+    allowClipboardShare: true,
+  }, settings.frameworkConfig || {});
+
+  // small helpers
+  function esc(s){ if(s === undefined || s === null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function evaluateItem(v) {
+    try { if(v && typeof v.evaluateItem !== 'undefined') return v.evaluateItem; } catch(e) {}
+    return v;
+  }
+
+  // variable parsing helpers
+  window.___gw_v3.variables = window.___gw_v3.variables || {};
+  function parseVariablesFromTextArea(text) {
+    const variables = {};
+    if(!text) return variables;
+    const lines = String(text).split(/\r?\n/);
+    for(const line of lines) {
+      const m = line.match(/^\s*([A-Za-z0-9_\-]+)\s*=\s*\[(.*)\]\s*$/) || line.match(/^\s*([A-Za-z0-9_\-]+)\s*=\s*\{(.*)\}\s*$/);
+      if(m) {
+        const key = m[1]; const rest = m[2];
+        const items = rest.split(/\|/).map(s=>s.trim()).filter(Boolean);
+        if(items.length) variables[key] = items;
+      }
+    }
+    return variables;
+  }
+
+  window.___gw_v3.expandVariables = function(text) {
+    if(!text) return text;
+    return text.replace(/\[([A-Za-z0-9_\-]+)\]/g, (m,k) => {
+      const list = window.___gw_v3.variables[k];
+      if(Array.isArray(list) && list.length) return list[Math.floor(Math.random()*list.length)];
+      return m;
+    });
+  };
+
+  // compression helpers
+  async function compressBlobWithGzip(blob) {
+    if(!window.CompressionStream) return blob;
+    try { const cs = new CompressionStream('gzip'); const compressed = blob.stream().pipeThrough(cs); return await new Response(compressed).blob(); } catch(e){ console.warn('gzip failed', e); return blob; }
+  }
+
+  async function decompressBlobWithGzip(blob) {
+    if(!window.DecompressionStream) return blob;
+    try { const ds = new DecompressionStream('gzip'); const decompressed = blob.stream().pipeThrough(ds); return await new Response(decompressed).blob(); } catch(e){ console.warn('gunzip failed', e); return blob; }
+  }
+
+  // collect user inputs into an array-friendly shape
+  function getUserInputsArray() {
+    const ui = settings.userInputs || {};
+    if(Array.isArray(ui.selectAll)) return ui.selectAll;
+    if(Array.isArray(ui.getChildNames)) {
+      const names = ui.getChildNames;
+      return names.map(n => { const obj = ui[n] || {}; obj._name = n; return obj; });
+    }
+    // fallback: keys
+    return Object.keys(ui).filter(k=>k!=='selectAll'&&k!=='getChildNames').map(k => { const obj = ui[k]; obj._name = k; return obj; });
+  }
+
+  // build options HTML for a select input
+  function buildSelectOptionsHtml(options) {
+    if(!options) return '';
+    let out = '';
+    if(Array.isArray(options)) {
+      for(const opt of options) {
+        if(typeof opt === 'string') out += `<option value="${esc(opt)}">${esc(opt)}</option>`;
+        else if(opt && (opt.value || opt.label)) out += `<option value="${esc(opt.value||opt.label)}">${esc(opt.label||opt.value)}</option>`;
+        else out += `<option>${esc(JSON.stringify(opt))}</option>`;
+      }
+    } else if(typeof options === 'object') {
+      // attempt to iterate child keys
+      for(const k of (options.getChildNames || Object.keys(options))) {
+        const opt = options[k];
+        if(typeof opt === 'string') out += `<option value="${esc(opt)}">${esc(opt)}</option>`;
+        else out += `<option value="${esc(k)}">${esc(opt.label||k)}</option>`;
+      }
+    }
+    return out;
+  }
+
+  // build user inputs html
+  const inputsArr = getUserInputsArray();
+  const inputsHtml = inputsArr.map(spec => {
+    const name = spec._name || spec.name || spec.label || (spec.getName ? spec.getName : 'input');
+    const label = spec.label || name;
+    const tip = spec.tip ? `<div class="gw-tip" style="font-size:85%;color:#666;margin-top:0.25rem;">${esc(spec.tip)}</div>` : '';
+    const id = `gw_v3_input_${name}`;
+    let inner = '';
+    const type = (spec.type || 'text');
+    if(type === 'paragraph') {
+      inner = `<textarea id="${id}" name="${name}" data-name="${name}" class="gw-v3-input" style="width:100%;min-height:6rem;">${esc(evaluateItem(spec.value) || spec.defaultValue || '')}</textarea>`;
+    } else if(type === 'select') {
+      const optsHtml = buildSelectOptionsHtml(spec.options);
+      inner = `<select id="${id}" name="${name}" data-name="${name}" class="gw-v3-input">${optsHtml}</select>`;
+    } else if(type === 'checkbox') {
+      inner = `<input id="${id}" type="checkbox" name="${name}" data-name="${name}" class="gw-v3-input" ${spec.value ? 'checked' : ''}/>`;
+    } else {
+      inner = `<input id="${id}" name="${name}" data-name="${name}" value="${esc(evaluateItem(spec.value) || spec.defaultValue || '')}" class="gw-v3-input" style="width:100%;"/>`;
+    }
+    // extras: random, examples
+    const extras = (spec.examples || spec.random) ? `<div style="margin-top:0.4rem;display:flex;gap:0.4rem;align-items:center;"><button class="gw-random-btn" data-target="${name}" type="button">Random</button><div style="font-size:85%;color:#666;">${esc(spec.examples ? (Array.isArray(spec.examples)? spec.examples.join(' | '): spec.examples) : '')}</div></div>` : '';
+    return `<div class="gw-v3-input-row" style="margin-bottom:0.8rem;"> <label style="font-weight:600;display:block;margin-bottom:0.25rem;">${esc(label)}</label> ${inner} ${tip} ${extras}</div>`;
+  }).join('\n');
+
+  // main UI: controls + inputs + output areas
+  const generateButtonId = 'gw_v3_generate_btn_main';
+  const shareButtonId = 'gw_v3_share_btn_main';
+  const inputsCtnId = 'gw_v3_inputs_ctn';
+  const outputCtnId = 'gw_v3_output_ctn';
+  const galleryCtnId = 'gw_v3_gallery_ctn';
+  const pageTitle = settings.pageTitle || 'GW Framework v3 Generator';
+
+  const controlsHtml = `<div style="display:flex;gap:0.6rem;align-items:center;margin-bottom:0.6rem;"><button id="${generateButtonId}">Generate (${window.___gw_v3.config.defaultNumImages})</button><button id="${shareButtonId}">Share</button><span style="margin-left:1rem;color:#888;">${esc(pageTitle)}</span></div>`;
+
+  const contentHtml = `<div class="gw-v3-ctn"><div style="max-width:1200px;margin:0 auto;display:grid;grid-template-columns: 1fr 420px;gap:1rem;">` +
+    `<div style="min-width:300px;">${controlsHtml}<div id="${inputsCtnId}">${inputsHtml}</div></div>` +
+    `<div style="min-width:320px;"><div id="${outputCtnId}"></div><div id="${galleryCtnId}" style="margin-top:0.8rem;"></div><div id="gw_v3_comments_ctn" style="margin-top:0.8rem;"></div></div>` +
+    `</div></div>`;
+
+  // return, escaping braces to avoid Perchance parser issues
+  const escaped = contentHtml.replaceAll('{','\\{').replaceAll('}','\\}');
+
+  // Post-render wiring: attach handlers, remember, parseVariables, visibility logic
+  setTimeout(() => {
+    try {
+      // map DOM elements back onto spec._element
+      const userInputs = settings.userInputs || {};
+      const arr = getUserInputsArray();
+      for(const spec of arr) {
+        const name = spec._name || spec.name || spec.label;
+        const el = document.querySelector(`[data-name="${name}"]`);
+        if(el) {
+          try { spec._element = el; } catch(e) {}
+          // restore remembered
+          if(spec.remember) {
+            try { const key = `${window.___gw_v3.config.rememberInputsPrefix}_${name}`; const val = localStorage.getItem(key); if(val !== null) { if(el.tagName.toLowerCase()==='textarea' || el.tagName.toLowerCase()==='input' || el.tagName.toLowerCase()==='select') el.value = val; } } catch(e){}
+          }
+          // event listeners
+          const ev = (ev) => {
+            try { const v = (el.type === 'checkbox' ? el.checked : el.value); window.input[name] = v; spec.value = v; if(spec.remember) { try { localStorage.setItem(`${window.___gw_v3.config.rememberInputsPrefix}_${name}`, v); } catch(e){} } parseAllVariables(); updateInputVisibilities(); } catch(e){}
+          };
+          el.addEventListener('input', ev);
+          el.addEventListener('change', ev);
+        }
+      }
+
+      // random buttons
+      document.querySelectorAll('.gw-random-btn').forEach(btn => {
+        btn.onclick = () => {
+          const target = btn.dataset.target; if(!target) return;
+          const spec = (settings.userInputs && (settings.userInputs[target] || (settings.userInputs.selectAll && settings.userInputs.selectAll.find(s=>s._name===target)))) || null;
+          if(!spec) return;
+          let val = '';
+          if(spec.random) {
+            if(Array.isArray(spec.random)) val = spec.random[Math.floor(Math.random()*spec.random.length)];
+            else if(typeof spec.random === 'function') try { val = spec.random(); } catch(e) {}
+          } else if(spec.examples && Array.isArray(spec.examples)) {
+            val = spec.examples[Math.floor(Math.random()*spec.examples.length)];
+          }
+          const el = document.querySelector(`[data-name="${target}"]`);
+          if(el) { if(el.tagName.toLowerCase() === 'textarea' || el.tagName.toLowerCase()==='input') el.value = val; else if(el.tagName.toLowerCase()==='select') el.value = val; el.dispatchEvent(new Event('input')); }
+        };
+      });
+
+      // parseVariables and visibility functions
+      function parseAllVariables() {
+        try {
+          const arr = getUserInputsArray();
+          for(const spec of arr) {
+            const name = spec._name || spec.name || spec.label;
+            if(spec.parseVariables && spec._element) {
+              const parsed = parseVariablesFromTextArea(spec._element.value);
+              Object.assign(window.___gw_v3.variables, parsed);
+            }
+          }
+        } catch(e) { console.warn(e); }
+      }
+
+      function updateInputVisibilities() {
+        try {
+          const arr = getUserInputsArray();
+          for(const spec of arr) {
+            const name = spec._name || spec.name || spec.label;
+            const row = document.querySelector(`[data-name="${name}"]`)?.closest('.gw-v3-input-row');
+            if(!row) continue;
+            if(typeof spec.visible === 'function') {
+              try { const v = spec.visible(); row.style.display = v ? '' : 'none'; } catch(e) { row.style.display = ''; }
+            } else row.style.display = '';
+          }
+        } catch(e) {}
+      }
+
+      // expose helpers
+      window.___gw_v3.parseAllVariables = parseAllVariables;
+      window.___gw_v3.updateInputVisibilities = updateInputVisibilities;
+
+      // getImageOptions: build merged image options replacing [input.FIELD] occurrences
+      function getInputDisplayValue(fieldName) {
+        try {
+          const v = window.input[fieldName];
+          if(v === undefined) {
+            const spec = settings.userInputs && settings.userInputs[fieldName];
+            if(spec && spec.value !== undefined) return spec.value;
+            return '';
+          }
+          if(typeof v === 'object' && v !== null) {
+            if(typeof v.getName !== 'undefined') return v.getName;
+            if(v.name) return v.name;
+            if(v.label) return v.label;
+            try { return JSON.stringify(v); } catch(e) { return '' }
+          }
+          return String(v);
+        } catch(e) { return ''; }
+      }
+
+      function expandInputsInString(s) {
+        if(!s) return s;
+        return String(s).replace(/\[input\.([^\]]+)\]/g, (m,k) => getInputDisplayValue(k));
+      }
+
+      function getImageOptions() {
+        let imgOpts = typeof settings.imageOptions === 'function' ? settings.imageOptions() : (settings.imageOptions || {});
+        imgOpts = Object.assign({}, imgOpts);
+        if(imgOpts.prompt) imgOpts.prompt = expandInputsInString(imgOpts.prompt);
+        if(imgOpts.negativePrompt) imgOpts.negativePrompt = expandInputsInString(imgOpts.negativePrompt || imgOpts.negative || '');
+        // shape resolution shorthand
+        if(window.input.shape) imgOpts.resolution = window.input.shape;
+        return imgOpts;
+      }
+
+      // generation wiring
+      window.___gw_v3._pending = window.___gw_v3._pending || 0;
+      window.___gw_v3.generate = async function(opts) {
+        opts = opts || {};
+        while(window.___gw_v3._pending >= window.___gw_v3.config.maxConcurrentGenerations) await new Promise(r=>setTimeout(r,200));
+        window.___gw_v3._pending++;
+        try {
+          parseAllVariables();
+          const imageOptions = getImageOptions();
+          if(opts.override) Object.assign(imageOptions, opts.override);
+          if(localStorage.forceColorScheme) imageOptions.forceColorScheme = localStorage.forceColorScheme;
+          const out = await window.___gw_v3.textToImage(imageOptions);
+          window.___gw_v3.emit('generated', out);
+          // render into output
+          const outCtn = document.getElementById(outputCtnId);
+          if(outCtn) {
+            if(typeof out === 'string') outCtn.innerHTML = out;
+            else if(out && out.items) outCtn.innerHTML = window.___gw_v3.helpers.makeImageGridHtml(out.items, { cols: window.___gw_v3.config.galleryCols });
+            else outCtn.innerHTML = '<div>Generated (no renderable output)</div>';
+          }
+          // optionally add to gallery
+          try { if(window.___gw_v3.config.gallery && window.___gw_v3.createMediaGallery && out && out.items) window.___gw_v3.createMediaGallery.add(out.items); } catch(e) {}
+          return out;
+        } catch(e) { console.error(e); throw e; }
+        finally { window.___gw_v3._pending--; }
+      };
+
+      // attach generate/share button handlers
+      const genBtn = document.getElementById(generateButtonId);
+      const shareBtn = document.getElementById(shareButtonId);
+      if(genBtn) genBtn.onclick = async () => { genBtn.disabled = true; genBtn.textContent = 'Generating...'; try { await window.___gw_v3.generate(); } catch(e) { alert('Generation failed'); } genBtn.disabled=false; genBtn.textContent=`Generate (${window.___gw_v3.config.defaultNumImages})`; };
+      if(shareBtn) shareBtn.onclick = async () => { shareBtn.disabled = true; shareBtn.textContent = 'Preparing share...'; try { const url = await window.___gw_v3.generateShareLink(); if(url && window.___gw_v3.config.allowClipboardShare && navigator.clipboard) await navigator.clipboard.writeText(url).catch(()=>{}); alert('Share ready'); } catch(e){ alert('Share failed'); } shareBtn.disabled=false; shareBtn.textContent='Share'; };
+
+      // initial visibility & vars
+      parseAllVariables(); updateInputVisibilities();
+    } catch(e) { console.error(e); }
+  }, 250);
+
+  // share link using compress + upload
+  window.___gw_v3.generateShareLink = async function(opts) {
+    opts = opts || {};
+    let data = window.___gw_v3.getAllUserInputValues ? window.___gw_v3.getAllUserInputValues() : {};
+    try { if(Object.keys(data).length === 0) data = (function(){ const out={}; const arr=getUserInputsArray(); for(const s of arr) { const n = s._name||s.name||s.label; if(s && s.excludeFromShareLink) continue; out[n] = (s._element && s._element.value !== undefined) ? s._element.value : s.value; } out.___format='gw-framework-v3'; return out; })(); } catch(e){}
+    let json = JSON.stringify(data);
+    if(window.___gw_v3.config.scrubShareData || opts.scrub) json = window.___gw_v3.scrubPII ? window.___gw_v3.scrubPII(json) : json;
+    let blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    blob = await compressBlobWithGzip(blob);
+    if(window.___gw_v3.upload) return await window.___gw_v3.upload(blob);
+    const arr = new Uint8Array(await blob.arrayBuffer()); const b64 = btoa(String.fromCharCode(...arr)); return `data:application/gzip;base64,${b64}`;
+  };
+
+  // small helper to get values
+  window.___gw_v3.getAllUserInputValues = function() { const out={}; const arr=getUserInputsArray(); for(const s of arr){ const n = s._name||s.name||s.label; if(s && s.excludeFromShareLink) continue; out[n] = (s._element && s._element.value !== undefined) ? s._element.value : s.value; } out.___format='gw-framework-v3'; return out; };
+
+  // small helpers for external use
+  window.___gw_v3.helpers = window.___gw_v3.helpers || {};
+  window.___gw_v3.helpers.makeImageGridHtml = function(items = [], opts = {}) { const cols = opts.cols || window.___gw_v3.config.galleryCols || 3; let html = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:0.6rem;">`; for(const it of items) html += `<div style="position:relative;">${it.html||it}</div>`; html += `</div>`; return html; };
+
+  // try to load from url hash on startup
+  (async function(){ try{ const raw = await (async function(){ try{ const h=(location.hash||'').replace(/^#/,''); if(!h) return null; if(h.startsWith('data:')){ const parts=h.split(','); const b64=parts[1]||''; const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); const blob=new Blob([arr]); const maybe = await decompressBlobWithGzip(blob); const text = await new Response(maybe).text(); return JSON.parse(text); } try{ return JSON.parse(decodeURIComponent(h)); }catch(e){return null;} }catch(e){return null;} })(); if(raw) window.___gw_v3.importUserInputValues && window.___gw_v3.importUserInputValues(raw); }catch(e){} })();
+
+  window.___gw_v3.register('gw-framework-plugin-v3', { title: 'GW Framework Plugin v3', version: '3.0' });
+
+  return escaped;

@@ -1,0 +1,59 @@
+generateHTML = {import:gw-framework-plugin-v3}
+
+$meta
+  title = GW Image Generator v3 (demo)
+  description = Demo generator using `gw-framework-plugin-v3` with full input rendering and wiring.
+
+settings
+  pageTitle = GW Image Generator v3
+  frameworkConfig
+    defaultNumImages = 6
+    galleryCols = 3
+
+  imageOptions
+    prompt = [input.artStyle?.prompt || input.description]
+    negativePrompt = [input.artStyle?.negative || input.negative || ""]
+    resolution = [input.shape || "512x512"]
+
+  userInputs
+    description
+      label = 📝 Description
+      type = paragraph
+      remember = true
+      parseVariables = true
+      examples
+        A lone wanderer in a neon city, cyberpunk vibe
+        A serene landscape of rolling hills and mist
+
+    artStyle
+      label = 🎨 Art Style
+      type = select
+      remember = true
+      options
+        meta:import
+          from = {import:t2i-styles}
+        No Style
+          prompt = [input.description]
+        Fantasy // custom
+          prompt = [input.description], detailed fantasy illustration, vibrant colors
+          negative = low-quality, fuzzy
+
+    shape
+      label = 🖼️ Shape
+      type = select
+      options
+        Portrait = 512x768
+        Square = 768x768
+        Landscape = 768x512
+
+    numImages
+      label = 🔢 How many?
+      type = select
+      options
+        3 = 3
+        6 = 6
+        9 = 9
+
+init() =>
+  // no-op: v3 framework renders and wires controls automatically
+  null

@@ -1,0 +1,96 @@
+// Demo generator for t2i-framework-plugin-gw
+
+generateHTML = {import:t2i-framework-plugin-gw}
+
+$meta
+  title = GW Demo Generator
+  description = Demo generator showcasing t2i-framework-plugin-gw features: presets, drag/drop, keyboard shortcuts, and persona generation.
+
+settings
+  pageTitle = GrandWoods — GW Demo
+  introMessage = This demo shows GW plugin features. Try Ctrl/Cmd+Enter to generate, or drag & drop an image. Use the presets controls to save/load/export settings.
+  numImages = [Number(input.numImages)]
+  socialFeatures = enabled
+
+  gw
+    enableAutoSuggest = true
+    allowDragDrop = true
+    keyboardShortcuts = true
+    presetsEnabled = true
+
+  imageButtons
+    personality = true
+    privateSave = true
+
+  imageOptions
+    saveTitle = Demo: [input.description]
+    prompt = [input.artStyle.prompt]
+    negativePrompt = [input.artStyle.negative]
+    resolution = [input.shape]
+
+  userInputs
+    scratchpad
+      label = 🗒️ Scratchpad
+      tip = [t2i.defaultText.scratchpadTip]
+      type = paragraph
+      remember = true
+      parseVariables = true
+      width = min(750px, 100%)
+      height = 30vh
+      takesUpFullRow = true
+      foldToggleState = shown
+
+    description
+      label = 📝 Description
+      tip = [t2i.defaultText.promptTip]
+      type = paragraph
+      remember = true
+      width = min(750px, 100%)
+      takesUpFullRow = true
+      random = [randomDescription]
+
+    negative
+      label = 🚫 Anti-Description
+      type = text
+      remember = true
+
+    artStyle
+      label = 🎨 Art Style
+      type = select
+      remember = true
+      options
+        Simple
+          prompt = [input.description]
+          negative = [input.negative]
+          meta:position = 0
+        Painterly
+          prompt = [input.description], oil painting, high detail, studio lighting
+          negative = [input.negative], low quality, blurry
+          meta:position = 1
+        Pixel
+          prompt = [input.description], pixel art, 8-bit, vivid colors
+          negative = [input.negative], low-quality
+          meta:position = 2
+
+    shape
+      label = 🖼️ Shape
+      type = select
+      remember = true
+      options
+        Portrait = 512x768
+        Square = 768x768
+        Landscape = 768x512
+
+    numImages
+      label = 🔢 How many?
+      type = select
+      remember = true
+      options
+        3 = 3
+        6 = 6
+        9 = 9
+
+randomDescription
+  a bold portrait of an adventurer with a scarred face and determined eyes
+  a mysterious mage surrounded by floating runes
+  a whimsical creature in a sunlit meadow

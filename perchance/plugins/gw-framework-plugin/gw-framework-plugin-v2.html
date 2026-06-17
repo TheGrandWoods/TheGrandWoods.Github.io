@@ -1,0 +1,19 @@
+<div style="max-width:800px;margin:0 auto;">
+  <h2 style="text-align:center;">GW Framework Plugin v2</h2>
+  <p>This plugin is a unified, full-featured text-to-image framework built from the ideas in <strong>t2i-framework-plugin-v2</strong> and <strong>t2i-framework-plugin-moss</strong>.</p>
+  <p>Features:</p>
+  <ul>
+    <li>Unified runtime API: <code>window.___gw_v2</code> (event bus, registry, helpers)</li>
+    <li>Share-link generation with optional gzip compression and upload</li>
+    <li>Input persistence, parseable variables, and prompt templating</li>
+    <li>AI prompt suggestions via <code>ai-text-plugin</code> integration</li>
+    <li>Gallery integration and optional private-save flow</li>
+    <li>Compatibility helpers for existing t2i-based generators</li>
+    <li>Modal and getUserInput helpers for interactive UIs</li>
+  </ul>
+  <p>Usage: in your generator header, set:</p>
+  <pre>generateHTML = {import:gw-framework-plugin-v2}</pre>
+  <p>Then pass a <code>settings</code> list with <code>userInputs</code>, <code>imageOptions</code>, and <code>frameworkConfig</code> as you would with other t2i frameworks. Access the runtime API at <code>window.___gw_v2</code>.</p>
+  <hr>
+  <p style="font-size:90%;color:#666;">This page is the documentation/landing panel for the plugin. See the plugin file for the full implementation.</p>
+</div>
