@@ -1,0 +1,76 @@
+generateHTML = {import:gw-framework-plugin}
+
+$meta
+  title = GW Image Generator (uses gw-framework-plugin)
+  description = Simple generator demonstrating `generateHTML = {import:gw-framework-plugin}` and wiring to `window.___gw`.
+
+settings
+  pageTitle = GW Image Generator
+  frameworkConfig
+    defaultNumImages = 6
+  imageOptions
+    // these settings will be passed to the text-to-image plugin via window.___gw.generate()
+    prompt = [input.description]
+    negativePrompt = [input.negative || ""]
+    resolution = 512x512
+
+userInputs
+  description
+    label = Describe the image
+    type = paragraph
+    remember = true
+    width = min(750px, 100%)
+    takesUpFullRow = true
+
+  negative
+    label = Undesired elements (optional)
+    type = text
+    remember = true
+
+// When this generator is rendered, the gw-framework-plugin will create the page controls.
+// We attach behavior after the DOM is available using a short 'init' function that registers
+// event handlers for the generate/share buttons and wires into window.___gw.generate().
+init() =>
+  // wait for framework to render controls
+  setTimeout(() => {
+    try {
+      const genBtn = document.getElementById('gw_generate_btn');
+      const shareBtn = document.getElementById('gw_share_btn');
+      const output = document.getElementById('gw_output_ctn');
+      if(genBtn) {
+        genBtn.onclick = async () => {
+          genBtn.disabled = true;
+          genBtn.textContent = 'Generating...';
+          try {
+            const out = await window.___gw.generate({ override: { prompt: document.querySelector('[name=description]')?.value || input.description } });
+            // if the framework returned HTML, place it; otherwise, call helpers
+            if(typeof out === 'string') output.innerHTML = out;
+            else if(out && out.items) output.innerHTML = window.___gw.helpers.makeImageGridHtml(out.items, { cols: 3 });
+          } catch(e) {
+            output.innerHTML = '<div style="color:crimson">Generation failed.</div>';
+            console.error(e);
+          }
+          genBtn.disabled = false;
+          genBtn.textContent = `Generate (${window.___gw.config.defaultNumImages})`;
+        };
+      }
+      if(shareBtn) {
+        shareBtn.onclick = async () => {
+          shareBtn.disabled = true;
+          shareBtn.textContent = 'Preparing share...';
+          try {
+            const url = await window.___gw.generateShareLink();
+            if(typeof url === 'string') {
+              await navigator.clipboard.writeText(url).catch(() => {});
+              alert('Share link copied to clipboard!');
+            }
+          } catch(e) { console.error(e); alert('Share failed'); }
+          shareBtn.disabled = false;
+          shareBtn.textContent = 'Share';
+        };
+      }
+    } catch(e) { console.error(e); }
+  }, 250);
+
+// register generator metadata with gw registry for discovery
+  setTimeout(() => { if(window.___gw && window.___gw.register) window.___gw.register('gw-image-generator', { title: 'GW Image Generator' }); }, 1000);

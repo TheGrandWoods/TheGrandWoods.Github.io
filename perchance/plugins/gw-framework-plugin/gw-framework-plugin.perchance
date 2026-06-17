@@ -1,0 +1,205 @@
+// GW Framework Plugin — unified, optimized T2I + UI framework
+// Combines ideas from t2i-framework-plugin-v2 and t2i-framework-plugin-moss
+
+textToImagePlugin = {import:text-to-image-plugin}
+commentsPlugin = {import:comments-plugin}
+selectLeaf = {import:select-leaf-plugin}
+fullscreenButton = {import:fullscreen-button-plugin}
+aiText = {import:ai-text-plugin}
+upload = {import:upload-plugin}
+prompt2 = {import:prompt2-plugin}
+t2iStyles = {import:t2i-styles}
+t2iStylesNsfw = {import:t2i-styles-mosberg-nsfw}
+tabbedCommentsPlugin = {import:tabbed-comments-plugin-v1}
+createMediaGalleryPlugin = {import:create-media-gallery-plugin}
+kv = {import:kv-plugin}
+superFetch = {import:super-fetch-plugin}
+
+// New, modular, extensible T2I framework. Pass a `settings` list to control page layout, features and behavior.
+$output(settings) =>
+  if(!window.input) window.input = {};
+  // lightweight runtime namespace
+  if(!window.___gw) window.___gw = {};
+
+  // defaults
+  if(!settings.imageOptions) settings.imageOptions = {};
+  if(typeof settings.imageOptions !== "function" && !settings.imageOptions.style) {
+    settings.imageOptions.style = "border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,0.12);";
+  }
+  if(settings._internal === undefined) settings._internal = {};
+
+  // plugin references available globally for imported generators
+  window.___gw.textToImage = textToImagePlugin;
+  window.___gw.comments = commentsPlugin;
+  window.___gw.kv = kv;
+  window.___gw.upload = upload;
+  window.___gw.aiText = aiText;
+  window.___gw.superFetch = superFetch;
+
+  // feature config
+  window.___gw.config = Object.assign({
+    lazyLoadIframes: true,
+    autoCompressShareLinks: true,
+    scrubShareData: true, // remove obvious PII before creating share blobs
+    enableProxiedFetch: false,
+    maxConcurrentGenerations: 3,
+    defaultNumImages: 6,
+  }, settings.frameworkConfig || {});
+
+  // Event bus
+  window.___gw._events = window.___gw._events || {};
+  window.___gw.on = function(name, cb) {
+    if(!this._events[name]) this._events[name] = [];
+    this._events[name].push(cb);
+    return () => { this._events[name] = this._events[name].filter(f => f !== cb); };
+  };
+  window.___gw.emit = function(name, ...args) {
+    (this._events[name] || []).forEach(cb => { try { cb(...args); } catch(e) { console.error(e); } });
+  };
+
+  // safe postMessage helper with origin checking
+  window.___gw.safePostMessage = function(iframeEl, msg, allowedOrigins) {
+    try {
+      if(!iframeEl || !iframeEl.contentWindow) return false;
+      const origin = (iframeEl.src || "").split("//")[1]?.split("/")[0] || "*";
+      if(Array.isArray(allowedOrigins) && allowedOrigins.length && allowedOrigins.indexOf(origin) === -1) {
+        console.warn("postMessage blocked: origin not allowed", origin);
+        return false;
+      }
+      iframeEl.contentWindow.postMessage(msg, allowedOrigins && allowedOrigins.length ? allowedOrigins[0] : "*");
+      return true;
+    } catch(e) { console.error(e); return false; }
+  };
+
+  // simple PII scrubber for share links (emails, phones)
+  window.___gw.scrubPII = function(text) {
+    if(!text) return text;
+    // remove email addresses
+    text = String(text).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig, "[redacted_email]");
+    // remove common phone patterns
+    text = text.replace(/\+?\d[\d\-() ]{6,}\d/g, "[redacted_phone]");
+    return text;
+  };
+
+  // gather user input values (exclude fields marked excludeFromShareLink)
+  window.___gw.getAllUserInputValues = function() {
+    let out = {};
+    const userInputs = settings.userInputs || (window.___userSettings746291937 && window.___userSettings746291937.userInputs) || {};
+    try {
+      for(let key in userInputs) {
+        if(userInputs[key] && userInputs[key].excludeFromShareLink) continue;
+        let el = userInputs[key] && userInputs[key]._element;
+        if(el && el.value !== undefined) out[key] = el.value;
+      }
+    } catch(e) { /* noop */ }
+    out.___format = "gw-framework-v1";
+    return out;
+  };
+
+  // share link generation (compression + optional scrub + upload)
+  window.___gw.generateShareLink = async function(opts) {
+    opts = opts || {};
+    if(window.___gw.config.scrubShareData || opts.scrub) {
+      // warn if likely PII present
+    }
+    let dataObj = window.___gw.getAllUserInputValues();
+    let json = JSON.stringify(dataObj);
+    if(window.___gw.config.scrubShareData || opts.scrub) {
+      json = window.___gw.scrubPII(json);
+    }
+    if(!window.CompressionStream) {
+      // fallback: upload as plain text
+      let blob = new Blob([json], { type: 'text/plain;charset=utf-8' });
+      return await upload(blob);
+    }
+    let blob = await fetch('data:text/plain;charset=utf-8,' + encodeURIComponent(json)).then(r => r.blob());
+    const cs = new CompressionStream('gzip');
+    const compressedStream = blob.stream().pipeThrough(cs);
+    let outBlob = await new Response(compressedStream).blob();
+    return await upload(outBlob);
+  };
+
+  // concurrency-safe generation pipeline
+  window.___gw._pending = 0;
+  window.___gw.generate = async function(opts) {
+    opts = opts || {};
+    while(window.___gw._pending >= window.___gw.config.maxConcurrentGenerations) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+    window.___gw._pending++;
+    try {
+      // build imageOptions merging defaults
+      let imageOptions = typeof settings.imageOptions === 'function' ? settings.imageOptions() : settings.imageOptions || {};
+      if(opts.override) Object.assign(imageOptions, opts.override);
+      if(localStorage.forceColorScheme) imageOptions.forceColorScheme = localStorage.forceColorScheme;
+      // call textToImage plugin (assumed to return HTML container or set iframe.textToImagePluginOutput)
+      let out = window.___gw.textToImage(imageOptions);
+      window.___gw.emit('generated', out);
+      return out;
+    } catch(e) { console.error(e); throw e; }
+    finally { window.___gw._pending--; }
+  };
+
+  // small helper UI primitives (modal, confirm) re-used from t2i frameworks
+  window.___gw.showModal = async function(html) {
+    if(!html) html = "<p>?</p>";
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.4);z-index:99999;';
+      const modal = document.createElement('div');
+      modal.style.cssText = 'background:var(--box-color);padding:1rem;border-radius:8px;max-width:90%;max-height:90%;overflow:auto;';
+      modal.innerHTML = html;
+      overlay.appendChild(modal);
+      overlay.onclick = e => { if(e.target === overlay) { overlay.remove(); resolve(null); } };
+      document.body.appendChild(overlay);
+    });
+  };
+
+  window.___gw.confirmAsync = async function(message, opts) {
+    opts = opts || {};
+    return new Promise(resolve => {
+      const html = `<div style="min-width:220px;">${message.replace(/</g,'&lt;')}</div><div style="margin-top:0.5rem;text-align:right;"> <button id=gw_cancel>Cancel</button> <button id=gw_ok>${opts.okText||'OK'}</button></div>`;
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.4);z-index:99999;';
+      const modal = document.createElement('div');
+      modal.style.cssText = 'background:var(--box-color);padding:1rem;border-radius:8px;min-width:260px;';
+      modal.innerHTML = html;
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      modal.querySelector('#gw_ok').onclick = () => { overlay.remove(); resolve(true); };
+      modal.querySelector('#gw_cancel').onclick = () => { overlay.remove(); resolve(false); };
+    });
+  };
+
+  // Register a plugin into gw registry (so external generators can discover capabilities)
+  window.___gw.registry = window.___gw.registry || {};
+  window.___gw.register = function(name, obj) { this.registry[name] = obj; };
+
+  // small utility: create image grid container and return HTML
+  function makeImageGridHtml(items = [], opts = {}) {
+    let cols = opts.cols || 3;
+    let html = `<div class="gw-image-grid" style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:0.6rem;">`;
+    for(let it of items) {
+      html += `<div class="gw-image-cell" style="position:relative;">${it.html || ''}</div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  // expose helpers for importing generators to call
+  window.___gw.helpers = { makeImageGridHtml };
+
+  // Render minimal page chrome and expose generate/share controls
+  const pageTitle = settings.pageTitle || "GW Image Generator";
+  const generateButtonId = 'gw_generate_btn';
+  const shareButtonId = 'gw_share_btn';
+  const outputId = 'gw_output_ctn';
+
+  // UI: simple header, controls and output area
+  const controlsHtml = `<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.6rem;">` +
+    `<button id="${generateButtonId}">Generate (${window.___gw.config.defaultNumImages})</button>` +
+    `<button id="${shareButtonId}">Share</button>` +
+    `<span style="margin-left:1rem;color:#888;">${pageTitle}</span></div>`;
+
+  // return HTML (escape braces to avoid Perchance parser issues)
+  return (`<div class="gw-framework-ctn">${controlsHtml}<div id="${outputId}"></div></div>`).replaceAll("{","\\{").replaceAll("}","\\}");
